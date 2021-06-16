@@ -255,7 +255,10 @@ class ChannelMaskConflict(MaskFix):
         sum_idx = (1, 2, 3) if self.conv_prune_dim == 0 else (0, 2, 3)
 
         (_tmp_name, _tmp_tensor) = list(self.masks.items())[0]
+        #  print (type(_tmp_tensor))
+        #  assert(0)
         device = _tmp_tensor['weight'].device
+        #  device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
         for dset in depen_sets:
             if len(dset) <= 1:

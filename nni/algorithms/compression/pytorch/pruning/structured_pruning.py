@@ -666,8 +666,7 @@ class ActivationMeanRankFilterPrunerMasker(ActivationFilterPrunerMasker):
         # is transfer to gpu.
         return self._cal_mean_activation(activations).to(wrapper.module.weight.device)
 
-
-class SlimPrunerMasker(WeightMasker):
+class SlimPrunerMasker(StructuredWeightMasker):
     """
     A structured pruning algorithm that prunes channels by pruning the weights of BN layers.
     Zhuang Liu, Jianguo Li, Zhiqiang Shen, Gao Huang, Shoumeng Yan and Changshui Zhang
@@ -676,7 +675,7 @@ class SlimPrunerMasker(WeightMasker):
     """
 
     def __init__(self, model, pruner, **kwargs):
-        super().__init__(model, pruner)
+        super().__init__(model, pruner, **kwargs)
         weight_list = []
         for (layer, _) in pruner.get_modules_to_compress():
             weight_list.append(layer.module.weight.data.abs().clone())
@@ -685,26 +684,79 @@ class SlimPrunerMasker(WeightMasker):
         self.global_threshold = torch.topk(
             all_bn_weights.view(-1), k, largest=False)[0].max()
 
-    def calc_mask(self, sparsity, wrapper, wrapper_idx=None):
-        assert wrapper.type == 'BatchNorm2d', 'SlimPruner only supports 2d batch normalization layer pruning'
-        weight = wrapper.module.weight.data.clone()
-        if wrapper.weight_mask is not None:
-            # apply base mask for iterative pruning
-            weight = weight * wrapper.weight_mask
+    def _common_channel_to_prune(self, sparsities, wrappers, wrappers_idx):
+        """
+        Calculate the common channels should be pruned by all the layers in this group.
+        This function is for filter pruning of Conv layers. if want to support the dependency-aware
+        mode for others ops, you need to inherit this class and overwrite `_common_channel_to_prune`.
 
-        base_mask = torch.ones(weight.size()).type_as(weight).detach()
-        mask = {'weight_mask': base_mask.detach(
-        ), 'bias_mask': base_mask.clone().detach()}
-        filters = weight.size(0)
-        num_prune = int(filters * sparsity)
-        if filters >= 2 and num_prune >= 1:
-            w_abs = weight.abs()
-            mask_weight = torch.gt(
-                w_abs, self.global_threshold).type_as(weight)
-            mask_bias = mask_weight.clone()
-            mask = {'weight_mask': mask_weight.detach(
-            ), 'bias_mask': mask_bias.detach()}
-        return mask
+        Parameters
+        ----------
+        sparsities : list
+            List of float that specify the sparsity for each conv layer.
+        wrappers : list
+            List of wrappers
+        wrappers_idx : list
+            The indexes of the wrappers
+        """
+        # sparsity configs for each wrapper
+        # sparsities = [_w.config['sparsity'] for _w in wrappers]
+        # check the type of the input wrappers
+        for _w in wrappers:
+            msg = 'module type {} is not supported!'.format(_w.type)
+            assert _w.type == 'BatchNorm2d', msg
+
+        num_wrappers = len(wrappers)
+        channel_count = wrappers[0].module.weight.data.size(0)
+        device = wrappers[0].module.weight.device
+        channel_sum = torch.zeros(channel_count).to(device)
+        for _w, _w_idx in zip(wrappers, wrappers_idx):
+            # calculate the L1/L2 sum for all channels
+            c_sum = self.get_channel_sum(_w, _w_idx)
+
+            if c_sum is None:
+                # if the channel sum cannot be calculated
+                # now, return None
+                return None
+            channel_sum += c_sum
+        channel_sum = channel_sum / num_wrappers
+
+        channel_masks = torch.gt(channel_sum, self.global_threshold)
+        pruned_channel_index = (
+            channel_masks == False).nonzero().squeeze(1).tolist()
+        logger.info('Prune the %s channels for all dependent',
+                    ','.join([str(x) for x in pruned_channel_index]))
+        return channel_masks
+
+    def get_channel_sum(self, wrapper, wrapper_idx):
+        weight = wrapper.module.weight.data
+        w_abs = weight.abs()
+        return w_abs
+
+    def calc_mask(self, sparsities, wrappers, wrappers_idx=None, **depen_kwargs):
+
+        channel_masks = self._common_channel_to_prune(sparsities, wrappers, wrappers_idx)
+        sparsity = sparsities[0]
+
+        masks = {}
+        for wrapper in wrappers:
+            assert wrapper.type == 'BatchNorm2d', 'SlimPruner only supports 2d batch normalization layer pruning'
+            weight = wrapper.module.weight.data.clone()
+            name = wrapper.name
+
+            base_mask = torch.ones(weight.size()).type_as(weight).detach()
+            mask = {'weight_mask': base_mask.detach(
+            ), 'bias_mask': base_mask.clone().detach()}
+            filters = weight.size(0)
+            num_prune = int(filters * sparsity)
+            if filters >= 2 and num_prune >= 1:
+                mask_weight = channel_masks.clone()
+                mask_bias = mask_weight.clone()
+                assert(mask_weight.shape == mask_bias.shape)
+                mask = {'weight_mask': mask_weight.detach(
+                ), 'bias_mask': mask_bias.detach()}
+            masks[name] = mask
+        return masks
 
 
 def least_square_sklearn(X, Y):

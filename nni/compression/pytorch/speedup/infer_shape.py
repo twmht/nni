@@ -231,6 +231,7 @@ infer_from_mask = {
     'BatchNorm2d': lambda module_masks, mask: batchnorm2d_mask(module_masks, mask),
     'Conv2d': lambda module_masks, mask: conv2d_mask(module_masks, mask),
     'ConvTranspose2d': lambda module_masks, mask: convtranspose2d_mask(module_masks, mask),
+    'PReLU': lambda module_masks, mask: prelu_mask(module_masks, mask),
     'Linear': lambda module_masks, mask, shape: linear_mask(module_masks, mask, shape)
 }
 
@@ -241,6 +242,7 @@ infer_from_inshape = {
     'ReLU': lambda module_masks, mask: relu_inshape(module_masks, mask),
     'ReLU6': lambda module_masks, mask: relu_inshape(module_masks, mask),
     'Sigmoid': lambda module_masks, mask: relu_inshape(module_masks, mask),
+    'PReLU': lambda module_masks, mask: prelu_inshape(module_masks, mask),
     'aten::relu': lambda module_masks, mask: relu_inshape(module_masks, mask),
     'aten::tanh': lambda module_masks, mask: relu_inshape(module_masks, mask),
     'aten::tanh_': lambda module_masks, mask: relu_inshape(module_masks, mask),
@@ -293,6 +295,7 @@ infer_from_outshape = {
     'AdaptiveAvgPool2d': lambda module_masks, mask: maxpool2d_outshape(module_masks, mask),
 
     'ReLU': lambda module_masks, mask: relu_outshape(module_masks, mask),
+    'PReLU': lambda module_masks, mask: prelu_outshape(module_masks, mask),
     'ReLU6': lambda module_masks, mask: relu_outshape(module_masks, mask),
     'aten::relu': lambda module_masks, mask: relu_outshape(module_masks, mask),
     'aten::tanh': lambda module_masks, mask: relu_outshape(module_masks, mask),
@@ -519,6 +522,34 @@ def batchnorm2d_outshape(module_masks, mask):
     module_masks.set_param_masks('bias', weight_cmask)
     return mask
 
+def prelu_outshape(module_masks, mask):
+    """
+    We assume only the second dimension has coarse grained mask
+
+    Parameters
+    ----------
+    module_masks : ModuleMasks
+        The ModuleMasks instance of the batchnorm2d
+    mask : CoarseMask
+        The mask of its input tensor
+
+    Returns
+    -------
+    CoarseMask
+        The mask of its output tensor
+    """
+    assert isinstance(mask, CoarseMask)
+    assert mask.mask_index[1] is not None
+    assert mask.mask_index[0] is None
+    assert mask.mask_index[2] is None
+    assert mask.mask_index[3] is None
+
+    weight_cmask = CoarseMask(num_dim=4)
+    weight_cmask.add_index_mask(dim=0, index=mask.mask_index[1])
+    module_masks.set_param_masks('weight', weight_cmask)
+
+    return mask
+
 
 def linear_inshape(module_masks, mask):
     """
@@ -734,6 +765,75 @@ def maxpool2d_outshape(module_masks, mask):
     module_masks.set_output_mask(mask)
     return mask
 
+def prelu_mask(module_masks, mask):
+    """
+    Infer input and output shape from weight mask
+    Parameters
+    ----------
+    module_masks : ModuleMasks
+        The ModuleMasks instance of the batchnorm2d
+    mask : dict
+        The mask of its weights, from the user provided mask file
+    Returns
+    -------
+    CoarseMask, CoarseMask
+        The mask of its input tensor, the mask of its output tensor
+    """
+    assert 'weight' in mask
+    #  print (mask['weight'].shape)
+    #  print (mask['bias'].shape)
+    #  print (mask['weight'])
+    #  print (mask['bias'])
+    sum_mask = mask['weight']
+    nonzero_index = torch.nonzero(sum_mask, as_tuple=True)[0]
+    # infer shape of parameters
+    param_cmask = CoarseMask(num_dim=1)
+    param_cmask.add_index_mask(dim=0, index=nonzero_index)
+    module_masks.set_param_masks('weight', param_cmask)
+    # infer shape of input tensor
+    input_cmask = CoarseMask(num_dim=4)
+    input_cmask.add_index_mask(dim=1,
+                               index=torch.nonzero(mask['weight'], as_tuple=True)[0])
+    module_masks.set_input_mask(input_cmask)
+    # infer shape of output tensor
+    output_cmask = CoarseMask(num_dim=4)
+    output_cmask.add_index_mask(dim=1, index=nonzero_index)
+    #  print (f'prelu_mask = {nonzero_index}')
+    #  print (f"input_cmasks = {torch.nonzero(mask['weight']).shape}")
+    #  print (f'output_cmask = {nonzero_index.size(0)}')
+    #  if nonzero_index.size(0) == 0:
+        #  print ('we got zero indexes')
+        #  assert(0)
+    module_masks.set_output_mask(output_cmask)
+    return input_cmask, output_cmask
+
+def prelu_inshape(module_masks, mask):
+    """
+    We assume only the second dimension has coarse grained mask
+
+    Parameters
+    ----------
+    module_masks : ModuleMasks
+        The ModuleMasks instance of the batchnorm2d
+    mask : CoarseMask
+        The mask of its input tensor
+
+    Returns
+    -------
+    CoarseMask
+        The mask of its output tensor
+    """
+    assert isinstance(mask, CoarseMask)
+    assert mask.mask_index[1] is not None
+    assert mask.mask_index[0] is None
+    assert mask.mask_index[2] is None
+    assert mask.mask_index[3] is None
+    module_masks.set_input_mask(mask)
+    module_masks.set_output_mask(mask)
+    weight_cmask = CoarseMask(num_dim=1)
+    weight_cmask.add_index_mask(dim=0, index=mask.mask_index[1])
+    module_masks.set_param_masks('weight', weight_cmask)
+    return mask
 
 def relu_inshape(module_masks, mask):
     """
@@ -798,8 +898,11 @@ def batchnorm2d_mask(module_masks, mask):
         The mask of its input tensor, the mask of its output tensor
     """
     assert 'weight' in mask and 'bias' in mask
+    print (f"mask weight = {mask['weight'].shape}")
+    print (f"mask bias = {mask['bias'].shape}")
     sum_mask = mask['weight'] + mask['bias']
     nonzero_index = torch.nonzero(sum_mask, as_tuple=True)[0]
+    print (f'nonzero_index = {nonzero_index.shape}')
     # infer shape of parameters
     param_cmask = CoarseMask(num_dim=1)
     param_cmask.add_index_mask(dim=0, index=nonzero_index)

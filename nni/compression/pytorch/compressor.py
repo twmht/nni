@@ -89,6 +89,9 @@ class Compressor:
         if self.modules_to_compress is None:
             self.modules_to_compress = []
             for name, module in self.bound_model.named_modules():
+                to_compress = getattr(module, 'compress', True)
+                if not to_compress:
+                    continue
                 if module == self.bound_model:
                     continue
                 layer = LayerInfo(name, module)
@@ -359,12 +362,32 @@ class Pruner(Compressor):
         config : dict
             the configuration for generating the mask
         """
-        _logger.debug("Module detected to compress : %s.", layer.name)
+        _logger.warning("Module detected to compress : %s.", layer.name)
         wrapper = PrunerModuleWrapper(layer.module, layer.name, layer.type, config, self)
         assert hasattr(layer.module, 'weight'), "module %s does not have 'weight' attribute" % layer.name
         # move newly registered buffers to the same device of weight
         wrapper.to(layer.module.weight.device)
         return wrapper
+
+    def get_mask(self):
+        pass
+
+    def apply_compression_result(self):
+        self._unwrap_model() # used for generating correct state_dict name without wrapper state
+        mask_dict = {}
+        for wrapper in self.get_modules_wrapper():
+            weight_mask = wrapper.weight_mask
+            bias_mask = wrapper.bias_mask
+            if weight_mask is not None:
+                mask_sum = weight_mask.sum().item()
+                mask_num = weight_mask.numel()
+                _logger.debug('Layer: %s  Sparsity: %.4f', wrapper.name, 1 - mask_sum / mask_num)
+                wrapper.module.weight.data = wrapper.module.weight.data.mul(weight_mask)
+            if bias_mask is not None:
+                wrapper.module.bias.data = wrapper.module.bias.data.mul(bias_mask)
+            # save mask to dict
+            mask_dict[wrapper.name] = {"weight": weight_mask, "bias": bias_mask}
+        return mask_dict
 
     def export_model(self, model_path, mask_path=None, onnx_path=None, input_shape=None, device=None):
         """

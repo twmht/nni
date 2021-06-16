@@ -800,6 +800,7 @@ class TorchModuleGraph(TorchGraph):
             else:
                 node_py = self.output_to_node[_input]
                 predecessors.append(node_py.unique_name)
+        assert(len(set(predecessors)) == len(predecessors))
         return predecessors
 
     def find_successors(self, unique_name):
@@ -824,4 +825,5 @@ class TorchModuleGraph(TorchGraph):
             nodes_py = self.input_to_node[output]
             for node_py in nodes_py:
                 successors.append(node_py.unique_name)
+        successors = list(set(successors))
         return successors

@@ -110,35 +110,6 @@ class LevelPruner(OneshotPruner):
         super().__init__(model, config_list, pruning_algorithm='level', optimizer=optimizer)
 
 
-class SlimPruner(OneshotPruner):
-    """
-    Parameters
-    ----------
-    model : torch.nn.Module
-        Model to be pruned
-    config_list : list
-        Supported keys:
-            - sparsity : This is to specify the sparsity operations to be compressed to.
-            - op_types : Only BatchNorm2d is supported in Slim Pruner.
-    optimizer: torch.optim.Optimizer
-            Optimizer used to train model
-    """
-
-    def __init__(self, model, config_list, optimizer=None):
-        super().__init__(model, config_list, pruning_algorithm='slim', optimizer=optimizer)
-
-    def validate_config(self, model, config_list):
-        schema = CompressorSchema([{
-            'sparsity': And(float, lambda n: 0 < n < 1),
-            'op_types': ['BatchNorm2d'],
-            Optional('op_names'): [str]
-        }], model, logger)
-
-        schema.validate(config_list)
-
-        if len(config_list) > 1:
-            logger.warning('Slim pruner only supports 1 configuration')
-
 
 class _StructuredFilterPruner(OneshotPruner):
     """
@@ -241,6 +212,7 @@ class _StructuredFilterPruner(OneshotPruner):
         """
         name2wrapper = {x.name: x for x in self.get_modules_wrapper()}
         wrapper2index = {x: i for i, x in enumerate(self.get_modules_wrapper())}
+        print (self.channel_depen.keys())
         for wrapper in self.get_modules_wrapper():
             if wrapper.if_calculated:
                 continue
@@ -254,12 +226,81 @@ class _StructuredFilterPruner(OneshotPruner):
 
             masks = self._dependency_calc_mask(
                 _wrappers, _names, wrappers_idx=_wrapper_idxes)
+            #  print (f'name = {wrapper.name}')
+            #  print (masks.keys())
+            #  assert(0)
             if masks is not None:
                 for layer in masks:
                     for mask_type in masks[layer]:
+                        #  print (f'mask_type = {mask_type}')
+                        #  print (f'layer = {layer}')
                         assert hasattr(
-                            name2wrapper[layer], mask_type), "there is no attribute '%s' in wrapper on %s" % (mask_type, layer)
+                            name2wrapper[layer], mask_type), f"there is no attribute {maks_type} in wrapper on {layer}"
                         setattr(name2wrapper[layer], mask_type, masks[layer][mask_type])
+
+class SlimPruner(_StructuredFilterPruner):
+    """
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to be pruned
+    config_list : list
+        Supported keys:
+            - sparsity : This is to specify the sparsity operations to be compressed to.
+            - op_types : Only BatchNorm2d is supported in Slim Pruner.
+    optimizer: torch.optim.Optimizer
+            Optimizer used to train model
+    """
+
+    def __init__(self, model, config_list, optimizer=None, dependency_aware=False, dummy_input=None):
+        super().__init__(model, config_list, pruning_algorithm='slim', optimizer=optimizer,
+                         dependency_aware=dependency_aware, dummy_input=dummy_input)
+
+    def _dependency_calc_mask(self, wrappers, channel_dsets, wrappers_idx=None):
+        """
+        calculate the masks for the conv layers in the same
+        channel dependecy set. All the layers passed in have
+        the same number of channels.
+
+        Parameters
+        ----------
+        wrappers: list
+            The list of the wrappers that in the same channel dependency
+            set.
+        wrappers_idx: list
+            The list of the indexes of wrapppers.
+        Returns
+        -------
+        masks: dict
+            A dict object that contains the masks of the layers in this
+            dependency group, the key is the name of the convolutional layers.
+        """
+        # The number of the groups for each conv layers
+        # Note that, this number may be different from its
+        # original number of groups of filters.
+        sparsities = [_w.config['sparsity'] for _w in wrappers]
+        masks = self.masker.calc_mask(
+            sparsities, wrappers, wrappers_idx)
+        if masks is not None:
+            # if masks is None, then the mask calculation fails.
+            # for example, in activation related maskers, we should
+            # pass enough batches of data to the model, so that the
+            # masks can be calculated successfully.
+            for _w in wrappers:
+                _w.if_calculated = True
+        return masks
+
+    def validate_config(self, model, config_list):
+        schema = CompressorSchema([{
+            'sparsity': And(float, lambda n: 0 < n < 1),
+            'op_types': ['BatchNorm2d'],
+            Optional('op_names'): [str]
+        }], model, logger)
+
+        schema.validate(config_list)
+
+        if len(config_list) > 1:
+            logger.warning('Slim pruner only supports 1 configuration')
 
 
 class L1FilterPruner(_StructuredFilterPruner):

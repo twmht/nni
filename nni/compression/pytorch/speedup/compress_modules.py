@@ -20,6 +20,7 @@ replace_module = {
     'Linear': lambda module, mask: replace_linear(module, mask),
     'Dropout': lambda module, mask: no_replace(module, mask),
     'Dropout2d': lambda module, mask: no_replace(module, mask),
+    'PReLU': lambda module, mask: replace_prelu(module, mask),
     'Dropout3d': lambda module, mask: no_replace(module, mask)
 }
 
@@ -31,6 +32,32 @@ def no_replace(module, mask):
     _logger.debug("no need to replace")
     return module
 
+def replace_prelu(norm, mask):
+    """
+    Parameters
+    ----------
+    norm : torch.nn.BatchNorm2d
+        The batchnorm module to be replace
+    mask : ModuleMasks
+        The masks of this module
+
+    Returns
+    -------
+    torch.nn.BatchNorm2d
+        The new batchnorm module
+    """
+    assert isinstance(mask, ModuleMasks)
+    assert 'weight' in mask.param_masks
+    index = mask.param_masks['weight'].mask_index[0]
+    num_features = index.size()[0]
+    _logger.debug("replace prelu with num_features: %d", num_features)
+    if num_features == 0:
+        return torch.nn.Identity()
+    new_norm = torch.nn.PReLU(num_features)
+    # assign weights
+    new_norm.weight.data = torch.index_select(norm.weight.data, 0, index)
+    #  print (f'replace prelu {new_norm.weight.data}')
+    return new_norm
 
 def replace_linear(linear, mask):
     """

@@ -76,7 +76,8 @@ class ChannelDependency(Dependency):
         queue.append(node)
         while queue:
             curnode = queue.pop(0)
-            if curnode.op_type == 'Conv2d' or curnode.op_type == 'Linear' or curnode.op_type == 'ConvTranspose2d':
+            #  if curnode.op_type == 'Conv2d' or curnode.op_type == 'Linear' or curnode.op_type == 'ConvTranspose2d':
+            if curnode.op_type == 'BatchNorm2d':
                 # find the first met conv
                 parent_layers.append(curnode.name)
                 continue
@@ -176,7 +177,8 @@ class ChannelDependency(Dependency):
         d_sets = []
         visited = set()
         for node in self.graph.nodes_py.nodes_op:
-            if node.op_type != 'Conv2d' or node in visited:
+            #  if node.op_type != 'Conv2d' or node in visited:
+            if node.op_type != 'BatchNorm2d' or node in visited:
                 continue
             tmp_set = set()
             if node.name not in self.dependency:

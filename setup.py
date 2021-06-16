@@ -80,7 +80,7 @@ def _setup():
         packages = _find_python_packages(),
         package_data = {
             'nni': _find_requirements_txt() + _find_default_config(),  # setuptools issue #1806
-            'nni_node': _find_node_files()  # note: this does not work before building
+            #  'nni_node': _find_node_files()  # note: this does not work before building
         },
 
         python_requires = '>=3.6',
@@ -112,7 +112,8 @@ def _find_python_packages():
     for dirpath, dirnames, filenames in os.walk('nni'):
         if '/__pycache__' not in dirpath and '/.mypy_cache' not in dirpath and '/default_config' not in dirpath:
             packages.append(dirpath.replace('/', '.'))
-    return sorted(packages) + ['nni_node']
+    #  return sorted(packages) + ['nni_node']
+    return sorted(packages)
 
 def _find_requirements_txt():
     requirement_files = []

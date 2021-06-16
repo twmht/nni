@@ -38,6 +38,7 @@ class ModelSpeedup:
         self.torch_graph = build_module_graph(model, dummy_input)
 
     def infer_module_mask(self, module_name, last_module, mask=None, in_shape=None, out_shape=None):
+        print (f'find {module_name}')
         """
         Infer input shape / output shape based on the module's weight mask / input shape / output shape.
 
@@ -116,10 +117,12 @@ class ModelSpeedup:
 
         if input_cmask:
             predecessors = self.torch_graph.find_predecessors(module_name)
+            print (f'got predecessors of {module_name} is {predecessors}')
             for _module_name in predecessors:
                 self.infer_module_mask(_module_name, module_name, out_shape=input_cmask)
         if output_cmask:
             successors = self.torch_graph.find_successors(module_name)
+            print (f'got sucessor of {module_name} is {successors} {len(successors)}')
             for _module_name in successors:
                 self.infer_module_mask(_module_name, module_name, in_shape=output_cmask)
 
@@ -136,7 +139,9 @@ class ModelSpeedup:
                 # not have conditionals on data in tensors)
                 # so, if a node is not traced, we just skip it.
                 _logger.warning('%s has mask, but not found in the traced graph, just skip it.', module_name)
+                #  print (self.torch_graph.name_to_node.keys())
                 continue
+            print (f'infer module_name {module_name}')
             self.infer_module_mask(module_name, None, mask=mask)
 
     def replace_compressed_modules(self):
@@ -176,8 +181,9 @@ class ModelSpeedup:
         _logger.info("start to speed up the model")
 
         _logger.info("fix the mask conflict of the interdependent layers")
-        _, conv_prune_dim = fix_mask_conflict(self.masks, self.bound_model, self.dummy_input)
-        set_conv_prune_dim(conv_prune_dim)
+        #  _, conv_prune_dim = fix_mask_conflict(self.masks, self.bound_model, self.dummy_input)
+        #  set_conv_prune_dim(conv_prune_dim)
+        set_conv_prune_dim(0)
 
         _logger.info("infer module masks...")
         self.infer_modules_masks()
